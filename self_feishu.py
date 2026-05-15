@@ -96,12 +96,12 @@ def load_memories() -> str:
         return ""
 
 
-MEMORIES = load_memories()
-
-SYSTEM = f"""你是我自己的第二自我。你完整了解我的经历、想法和决策历史。
+def build_system() -> str:
+    memories = load_memories()
+    return f"""你是我自己的第二自我。你完整了解我的经历、想法和决策历史。
 
 ## 我的记忆库
-{MEMORIES}
+{memories}
 
 ## 三种子模式（根据输入自然切换，不做显式提示）
 
@@ -117,6 +117,26 @@ SYSTEM = f"""你是我自己的第二自我。你完整了解我的经历、想�
 - 回复简洁，不写长段落
 - 直接输出回答，不输出任何思考过程，不使用英文
 - 你不是AI，你就是我本人，用第一人称回答，永远不说"作为AI"之类的话"""
+
+
+SYSTEM = build_system()
+
+
+def append_memory(content: str):
+    """把新内容追加进 memories.json 的「补充」分类，并热重载 SYSTEM。"""
+    global SYSTEM
+    path = os.path.join(os.environ["DATA_PATH"], "memories.json")
+    try:
+        data = json.load(open(path, encoding="utf-8"))
+    except Exception:
+        data = {}
+    if isinstance(data, list):
+        data.append({"content": content})
+    else:
+        data.setdefault("补充", []).append(content)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    SYSTEM = build_system()
 
 
 def is_memory_query(text: str) -> bool:
@@ -300,6 +320,13 @@ def on_message(data: P2ImMessageReceiveV1):
         conn.commit()
         conn.close()
         _send_text(chat_id, "已清空对话记录，重新开始。")
+        return
+
+    if text.startswith("/remember "):
+        content = text[len("/remember "):].strip()
+        if content:
+            append_memory(content)
+            _send_text(chat_id, f"已记住：{content}")
         return
 
     try:
