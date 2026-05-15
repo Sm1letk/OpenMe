@@ -1,0 +1,6 @@
+lark-oapi
+openai
+flask
+chromadb
+beautifulsoup4
+python-dotenv

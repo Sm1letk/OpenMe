@@ -1,0 +1,16 @@
+[Unit]
+Description=Self Feishu Bot (Private Mode)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/bots
+ExecStart=/usr/bin/python3 /home/bots/self_feishu.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
