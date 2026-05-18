@@ -353,7 +353,7 @@ def on_message(data: P2ImMessageReceiveV1):
                 else:
                     _send_text(chat_id, f"❌ 入库失败：{title}")
             except Exception as e:
-                _send_text(chat_id, f"❌ 出错了：{e}")
+                _send_text(chat_id, f"❌ 出错了：{type(e).__name__}: {str(e)[:200]}")
             return
         else:
             _send_text(chat_id, "暂不支持该链接类型（目前支持微信公众号和 X 推文）")
