@@ -15,6 +15,7 @@ load_dotenv()
 # ── 懒加载客户端（测试时不会触发连接） ────────────────────────────────────
 
 _qw = None
+_chroma = None
 _col = None
 
 
@@ -30,12 +31,12 @@ def _get_qw():
 
 
 def _get_col():
-    global _col
+    global _chroma, _col
     if _col is None:
         import chromadb
         CHROMA_PATH = os.environ["CHROMA_PATH"]
-        chroma = chromadb.PersistentClient(path=CHROMA_PATH)
-        _col = chroma.get_or_create_collection(
+        _chroma = chromadb.PersistentClient(path=CHROMA_PATH)
+        _col = _chroma.get_or_create_collection(
             "memories",
             metadata={"hnsw:space": "cosine"},
         )
@@ -170,6 +171,8 @@ def _fetch_tweet(url: str) -> tuple[str, str]:
 
     tweet = data.get("tweet") or {}
     text = tweet.get("text", "")
+    if not text:
+        return None
     author = tweet.get("author", {}).get("name") or username
     title = f"@{username}: {text[:60]}{'…' if len(text) > 60 else ''}"
     body = f"@{author}\n{text}"
@@ -207,7 +210,10 @@ def ingest_url(url: str) -> tuple[bool, str]:
             title, body = _fetch_wechat(url)
             source = "wechat_manual"
         else:  # "x"
-            title, body = _fetch_tweet(url)
+            result = _fetch_tweet(url)
+            if result is None:
+                return False, "推文内容为空（已删除或 API 异常）"
+            title, body = result
             source = "x_manual"
     except Exception as e:
         return False, f"抓取失败: {e}"
