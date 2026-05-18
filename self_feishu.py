@@ -6,6 +6,7 @@ except ModuleNotFoundError:
     pass
 
 import os, json, time, re, sqlite3
+from datetime import datetime
 import requests
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import *
@@ -498,7 +499,6 @@ def _generate_and_save_draft(index: int, direction: str) -> str:
     else:
         doc_title = theme
 
-    from datetime import datetime
     date_str = datetime.now().strftime("%Y-%m-%d")
     doc_full_title = f"{date_str}_{doc_title}"
 
