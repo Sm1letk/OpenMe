@@ -4,7 +4,7 @@
 调用 Feishu docx v1 API 在指定文件夹创建文档并写入内容。
 """
 
-import os, time, json
+import os, time
 import requests
 from dotenv import load_dotenv
 
@@ -27,6 +27,8 @@ def _get_token() -> str:
         json={"app_id": APP_ID, "app_secret": APP_SECRET},
         timeout=10,
     ).json()
+    if "tenant_access_token" not in resp:
+        raise RuntimeError(f"获取 token 失败: {resp}")
     _token_cache["token"] = resp["tenant_access_token"]
     _token_cache["expires_at"] = time.time() + resp.get("expire", 7200)
     return _token_cache["token"]
