@@ -1,3 +1,10 @@
+try:
+    __import__('pysqlite3')
+    import sys as _sys
+    _sys.modules['sqlite3'] = _sys.modules.pop('pysqlite3')
+except ModuleNotFoundError:
+    pass
+
 import os, json, time, re, sqlite3
 import requests
 import lark_oapi as lark
@@ -5,6 +12,7 @@ from lark_oapi.api.im.v1 import *
 from openai import OpenAI
 from dotenv import load_dotenv
 from rag import retrieve
+from content_ingest import ingest_url, detect_url_type
 
 load_dotenv()
 
@@ -328,6 +336,28 @@ def on_message(data: P2ImMessageReceiveV1):
             append_memory(content)
             _send_text(chat_id, f"已记住：{content}")
         return
+
+    # /chatid 命令：输出当前 chat_id，用于配置 TARGET_CHAT_ID
+    if text == "/chatid":
+        _send_text(chat_id, f"当前 chat_id: {chat_id}")
+        return
+
+    # URL 入库分支
+    if text.startswith("http://") or text.startswith("https://"):
+        if detect_url_type(text) is not None:
+            _send_text(chat_id, "正在抓取入库...")
+            try:
+                ok, title = ingest_url(text)
+                if ok:
+                    _send_text(chat_id, f"✅ 已入库：{title}")
+                else:
+                    _send_text(chat_id, f"❌ 入库失败：{title}")
+            except Exception as e:
+                _send_text(chat_id, f"❌ 出错了：{e}")
+            return
+        else:
+            _send_text(chat_id, "暂不支持该链接类型（目前支持微信公众号和 X 推文）")
+            return
 
     try:
         ask_self(chat_id, user_id, text)
