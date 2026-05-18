@@ -1,0 +1,220 @@
+try:
+    __import__('pysqlite3')
+    import sys
+    sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+except ModuleNotFoundError:
+    pass
+
+import os, re, hashlib, time
+import requests
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# ── 懒加载客户端（测试时不会触发连接） ────────────────────────────────────
+
+_qw = None
+_col = None
+
+
+def _get_qw():
+    global _qw
+    if _qw is None:
+        from openai import OpenAI
+        _qw = OpenAI(
+            api_key=os.environ["QIANWEN_API_KEY"],
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+    return _qw
+
+
+def _get_col():
+    global _col
+    if _col is None:
+        import chromadb
+        CHROMA_PATH = os.environ["CHROMA_PATH"]
+        chroma = chromadb.PersistentClient(path=CHROMA_PATH)
+        _col = chroma.get_or_create_collection(
+            "memories",
+            metadata={"hnsw:space": "cosine"},
+        )
+    return _col
+
+
+# ── URL 类型识别 ──────────────────────────────────────────────────────────
+
+def detect_url_type(url: str) -> str | None:
+    """
+    返回 URL 类型：
+    - "wechat"  if URL contains mp.weixin.qq.com
+    - "x"       if URL matches x.com or twitter.com status pattern
+    - None      otherwise
+    """
+    if "mp.weixin.qq.com" in url:
+        return "wechat"
+    if re.search(r'(?:x|twitter)\.com/\w+/status/\d+', url):
+        return "x"
+    return None
+
+
+def extract_tweet_info(url: str) -> tuple[str, str]:
+    """
+    从 X/Twitter URL 中提取 (username, tweet_id)。
+    例：https://x.com/btcbears/status/2055923801519542485?s=46
+      → ("btcbears", "2055923801519542485")
+    """
+    m = re.search(r'(?:x|twitter)\.com/(\w+)/status/(\d+)', url)
+    if not m:
+        raise ValueError(f"无法从 URL 提取 tweet 信息: {url}")
+    return m.group(1), m.group(2)
+
+
+# ── Embedding ─────────────────────────────────────────────────────────────
+
+def embed(text: str) -> list[float]:
+    qw = _get_qw()
+    for attempt in range(3):
+        try:
+            resp = qw.embeddings.create(
+                model="text-embedding-v3",
+                input=text[:2000],
+            )
+            return resp.data[0].embedding
+        except Exception as e:
+            if attempt == 2:
+                raise
+            print(f"  [WARN] embed failed (attempt {attempt+1}): {e}, retrying...")
+            time.sleep(2)
+
+
+# ── 去重 & 入库 ───────────────────────────────────────────────────────────
+
+def _url_doc_id(url: str) -> str:
+    return hashlib.md5(url.encode()).hexdigest()
+
+
+def _already_ingested(doc_id: str) -> bool:
+    col = _get_col()
+    existing = col.get(ids=[doc_id])
+    return bool(existing["ids"])
+
+
+def _store(doc_id: str, text: str, title: str, url: str, source: str) -> None:
+    col = _get_col()
+    vec = embed(text)
+    col.add(
+        ids=[doc_id],
+        embeddings=[vec],
+        documents=[text],
+        metadatas=[{
+            "source": source,
+            "url": url,
+            "title": title,
+            "timestamp": int(time.time()),
+        }],
+    )
+    print(f"  [ingest] 已入库: {title!r} ({len(text)} chars)")
+
+
+# ── 微信文章抓取 ──────────────────────────────────────────────────────────
+
+WECHAT_UA = (
+    "Mozilla/5.0 (Linux; Android 14; SM-S918B) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Mobile Safari/537.36 "
+    "MicroMessenger/8.0.50.2701(0x2800323A) "
+    "NetType/WIFI Language/zh_CN"
+)
+
+
+def _fetch_wechat(url: str) -> tuple[str, str]:
+    """
+    抓取微信公众号文章，返回 (title, body_text)。
+    使用微信内置浏览器 UA 伪装。
+    """
+    headers = {"User-Agent": WECHAT_UA}
+    resp = requests.get(url, headers=headers, timeout=15)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # 标题
+    title_tag = soup.find("h1", id="activity-name") or soup.find("h1")
+    title = title_tag.get_text(strip=True) if title_tag else "微信文章"
+
+    # 正文
+    content_div = (
+        soup.find("div", id="js_content")
+        or soup.find("div", class_=re.compile(r"rich_media_content"))
+        or soup.find("div", id="content")
+    )
+    if content_div:
+        body = content_div.get_text(separator="\n", strip=True)
+    else:
+        body = soup.get_text(separator="\n", strip=True)
+
+    return title, body
+
+
+# ── X / Twitter 抓取（fxtwitter API） ────────────────────────────────────
+
+def _fetch_tweet(url: str) -> tuple[str, str]:
+    """
+    通过 fxtwitter API 抓取推文，返回 (title, body_text)。
+    """
+    username, tweet_id = extract_tweet_info(url)
+    api_url = f"https://api.fxtwitter.com/{username}/status/{tweet_id}"
+    resp = requests.get(api_url, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+
+    tweet = data.get("tweet") or {}
+    text = tweet.get("text", "")
+    author = tweet.get("author", {}).get("name") or username
+    title = f"@{username}: {text[:60]}{'…' if len(text) > 60 else ''}"
+    body = f"@{author}\n{text}"
+
+    return title, body
+
+
+# ── 主入口 ────────────────────────────────────────────────────────────────
+
+def ingest_url(url: str) -> tuple[bool, str]:
+    """
+    识别 URL 类型 → 抓取正文 → 向量化 → 入库 ChromaDB。
+    返回 (success, title)。
+    已入库则跳过并返回 (True, "标题（已入库）")。
+    """
+    url_type = detect_url_type(url)
+    if url_type is None:
+        return False, f"不支持的 URL 类型: {url}"
+
+    doc_id = _url_doc_id(url)
+
+    # 去重检查
+    if _already_ingested(doc_id):
+        col = _get_col()
+        existing = col.get(ids=[doc_id], include=["metadatas"])
+        title = ""
+        if existing["metadatas"]:
+            title = existing["metadatas"][0].get("title", "")
+        if not title:
+            title = url
+        return True, f"{title}（已入库）"
+
+    try:
+        if url_type == "wechat":
+            title, body = _fetch_wechat(url)
+            source = "wechat_manual"
+        else:  # "x"
+            title, body = _fetch_tweet(url)
+            source = "x_manual"
+    except Exception as e:
+        return False, f"抓取失败: {e}"
+
+    try:
+        _store(doc_id, body, title, url, source)
+    except Exception as e:
+        return False, f"入库失败: {e}"
+
+    return True, title
