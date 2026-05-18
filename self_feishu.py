@@ -13,12 +13,60 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from rag import retrieve
 from content_ingest import ingest_url, detect_url_type
+from feishu_docs import create_doc
 
 load_dotenv()
 
 APP_ID     = os.environ["SELF_FEISHU_APP_ID"]
 APP_SECRET = os.environ["SELF_FEISHU_APP_SECRET"]
 MODEL      = "MiniMax-M2.7"
+PENDING_TOPICS_PATH = os.path.join(os.environ["DATA_PATH"], "pending_topics.json")
+PENDING_TTL = 24 * 3600  # 24小时内的选题缓存视为有效
+
+LONG_DRAFT_PROMPT = """你是一个正在写作的知识工作者，根据下面的个人背景和素材，写一篇深度文章。
+
+## 我的个人背景
+{memories}
+
+## 本篇素材（来自我的真实阅读和思考）
+{materials}
+
+## 写作要求
+- 主题聚焦：围绕「{theme}」展开，角度：{angle}
+- 字数：800-1200字
+- 风格：有观点，有例子，有判断，不说废话
+- 结构：开头一句话抓住核心观点，正文展开，结尾一句话收尾
+- 语气：第一人称，像在和朋友分享，不用"首先/其次/最后"等套路词
+- 不要写"作为一个XX"这类开头
+- 【脱敏要求】不得出现任何真实公司名、产品名、客户名，用通用描述替代
+- 【语言要求】必须全程中文，不得出现英文
+- 【格式要求】直接输出最终内容，不要输出任何分析、思考过程或写作计划
+- 第一行是标题（不加"标题："前缀）
+
+现在开始写："""
+
+SHORT_DRAFT_PROMPT = """根据下面的个人背景和素材，写一条适合即刻/小红书的短内容。
+
+## 我的个人背景
+{memories}
+
+## 素材
+{materials}
+
+## 写作要求
+- 主题：「{theme}」，角度：{angle}
+- 字数：150-300字
+- 风格：口语化，有个人观点，像朋友圈分享
+- 开头一句话要有冲击力
+- 可以有1-3个要点，不用数字编号
+- 结尾可以有一个反问或开放性问题
+- 不加标签（#）
+- 【脱敏要求】不得出现任何真实公司名、产品名、客户名
+- 【语言要求】必须全程中文，不得出现英文
+- 【格式要求】直接输出最终内容，不要输出任何分析、思考过程
+
+现在写："""
+
 DB_PATH    = os.path.join(os.environ["DATA_PATH"], "conversations.db")
 FEISHU_API = "https://open.feishu.cn/open-apis"
 
@@ -337,6 +385,19 @@ def on_message(data: P2ImMessageReceiveV1):
             _send_text(chat_id, f"已记住：{content}")
         return
 
+    # 选题回复分支：检测是否为"数字"或"数字，方向"格式
+    topic_match = re.match(r'^\s*(\d+)\s*(?:[，,]\s*(.+))?\s*$', text)
+    if topic_match and _has_valid_pending_topics():
+        index = int(topic_match.group(1))
+        direction = (topic_match.group(2) or "").strip()
+        _send_text(chat_id, "正在生成草稿...")
+        try:
+            url = _generate_and_save_draft(index, direction)
+            _send_text(chat_id, f"✅ 草稿已生成：{url}")
+        except Exception as e:
+            _send_text(chat_id, f"❌ 草稿生成失败：{type(e).__name__}: {str(e)[:200]}")
+        return
+
     # /chatid 命令：输出当前 chat_id，用于配置 TARGET_CHAT_ID
     if text == "/chatid":
         _send_text(chat_id, f"当前 chat_id: {chat_id}")
@@ -363,6 +424,86 @@ def on_message(data: P2ImMessageReceiveV1):
         ask_self(chat_id, user_id, text)
     except Exception as e:
         _send_text(chat_id, f"出了点问题：{e}")
+
+
+# ── 选题草稿辅助 ──────────────────────────────────────────────────────────────
+
+def _has_valid_pending_topics() -> bool:
+    """判断是否存在有效的（24小时内）待确认选题"""
+    if not os.path.exists(PENDING_TOPICS_PATH):
+        return False
+    try:
+        with open(PENDING_TOPICS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return time.time() - data.get("generated_at", 0) < PENDING_TTL
+    except Exception:
+        return False
+
+
+def _generate_and_save_draft(index: int, direction: str) -> str:
+    """
+    根据选题序号和可选方向生成草稿，创建飞书文档，返回文档 URL。
+    """
+    with open(PENDING_TOPICS_PATH, encoding="utf-8") as f:
+        data = json.load(f)
+    topics = {t["index"]: t for t in data["topics"]}
+
+    if index not in topics:
+        raise ValueError(f"选题序号 {index} 不存在（共 {len(topics)} 条）")
+
+    topic = topics[index]
+    docs_list = data.get("docs_by_index", {}).get(str(index), [])
+    materials = "\n\n---\n\n".join(
+        d["text"][:500] if isinstance(d, dict) else str(d)
+        for d in docs_list[:5]
+    )
+
+    theme = topic["title"]
+    angle = direction if direction else topic.get("angle", "")
+    memories = load_memories()
+
+    # 判断长文/短文（direction 含"短文"则短文，否则默认长文）
+    is_short = "短文" in direction
+
+    if is_short:
+        prompt = SHORT_DRAFT_PROMPT.format(
+            memories=memories[:800],
+            materials=materials[:1500],
+            theme=theme,
+            angle=angle,
+        )
+        max_tokens = 800
+    else:
+        prompt = LONG_DRAFT_PROMPT.format(
+            memories=memories[:1500],
+            materials=materials[:3000],
+            theme=theme,
+            angle=angle,
+        )
+        max_tokens = 2000
+
+    resp = ai.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=max_tokens,
+        temperature=0.8,
+    )
+    content = resp.choices[0].message.content
+    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+    # 提取标题（长文第一行，短文用 theme）
+    if not is_short:
+        lines = content.strip().split('\n')
+        doc_title = lines[0].lstrip('#').strip() or theme
+    else:
+        doc_title = theme
+
+    from datetime import datetime
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    doc_full_title = f"{date_str}_{doc_title}"
+
+    doc_url = create_doc(doc_full_title, content)
+    return doc_url
 
 
 handler = lark.EventDispatcherHandler.builder("", "") \
