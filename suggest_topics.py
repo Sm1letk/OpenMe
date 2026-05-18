@@ -65,7 +65,8 @@ def _send_text(text: str):
 def _load_memories() -> str:
     path = os.path.join(DATA_PATH, "memories.json")
     try:
-        data = json.loads(open(path, encoding="utf-8").read())
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
         if isinstance(data, list):
             return "\n".join(item.get("content", str(item)) for item in data)
         return json.dumps(data, ensure_ascii=False, indent=2)
@@ -140,7 +141,10 @@ def _generate_topics(docs: list[dict], memories: str) -> list[dict]:
     m = re.search(r'\[.*\]', raw, re.DOTALL)
     if not m:
         raise ValueError(f"MiniMax 未返回 JSON 数组: {raw[:200]}")
-    topics = json.loads(m.group(0))
+    try:
+        topics = json.loads(m.group(0))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"JSON 解析失败: {e} | 原文: {raw[:200]}")
     return topics
 
 
@@ -174,9 +178,10 @@ def main():
         "generated_at": int(time.time()),
         "topics": topics,
         "docs_by_index": {
-            str(t["index"]): [
-                d for d in docs if t.get("source_url", "") in d.get("url", "")
-            ] or docs[:3]
+            str(t["index"]): (
+                [d for d in docs if t.get("source_url") and t["source_url"] in d.get("url", "")]
+                or docs[:3]
+            )
             for t in topics
         }
     }
