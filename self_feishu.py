@@ -157,14 +157,22 @@ def build_system() -> str:
     memories = load_memories()
     return f"""你是我自己的第二自我。你完整了解我的经历、想法和决策历史。
 
-## 我的记忆库
+## 我的个人背景
 {memories}
+
+## 我的知识库（向量数据库）
+我有一个持续更新的知识库，里面存有：
+- 我读过的文章、推文、公众号内容（36氪、follow builders 推文等）
+- 我手动保存的内容片段
+- 我过去的想法和记录
+
+当我问到"有没有相关内容"、"36氪有什么"、"找一下"、"有哪些关联"等时，你能从下方「检索到的相关片段」里找到答案。如果检索结果里有相关内容，直接引用和分析，不要说"没收到"或让我再发一遍。
 
 ## 三种子模式（根据输入自然切换，不做显式提示）
 
 **推演**：当我描述决策/纠结时——用我自己的思维框架拆解，给判断，也说出反面。
 **镜子**：当我描述感受/陈述一件事时——先反问，帮我把想法说清楚。
-**记忆**：当我问"我之前怎么看……"时——从下方检索到的历史片段中引用原文。
+**知识库**：当我问相关内容/文章/之前想法时——从检索到的片段中引用原文作答。
 
 ## 行为约束
 - 不表演聪明，不给标准答案
@@ -197,7 +205,11 @@ def append_memory(content: str):
 
 
 def is_memory_query(text: str) -> bool:
-    keywords = ["之前", "曾经", "以前", "当时", "历史", "记得", "怎么看", "说过", "想过"]
+    keywords = [
+        "之前", "曾经", "以前", "当时", "历史", "记得", "怎么看", "说过", "想过",
+        "文章", "素材", "结合", "36氪", "公众号", "看过", "读过", "入库", "知识库",
+        "相关", "有没有", "有什么", "找一下", "搜一下",
+    ]
     return any(k in text for k in keywords)
 
 
@@ -271,9 +283,18 @@ def ask_self(chat_id: str, user_id: str, text: str):
     rag_context = ""
     if is_memory_query(text):
         try:
-            hits = retrieve(text, n=5)
+            # 如果用户明确问 36氪/公众号，按来源过滤，避免被其他内容淹没
+            source_keywords = {"36氪": "wechat_article", "公众号": "wechat_article"}
+            where_filter = None
+            for kw, src in source_keywords.items():
+                if kw in text:
+                    where_filter = {"source": src}
+                    break
+
+            hits = retrieve(text, n=5, where=where_filter)
             if hits:
-                rag_context = "\n\n## 检索到的相关历史片段\n" + "\n---\n".join(hits)
+                label = "36氪文章" if where_filter else "知识库"
+                rag_context = f"\n\n## 检索到的相关片段（来自{label}）\n" + "\n---\n".join(hits)
         except Exception:
             pass
 
@@ -358,7 +379,8 @@ def on_message(data: P2ImMessageReceiveV1):
 
     if msg.message_type != "text":
         return
-    if sender.sender_type == "bot":
+    # 过滤非用户消息（bot/app 自己发的消息 sender_type 为 "app" 或 "bot"）
+    if sender.sender_type not in ("user",):
         return
     if msg.message_id in processed:
         return
@@ -386,6 +408,21 @@ def on_message(data: P2ImMessageReceiveV1):
             _send_text(chat_id, f"已记住：{content}")
         return
 
+    if text.startswith("/save "):
+        content = text[len("/save "):].strip()
+        if not content:
+            _send_text(chat_id, "用法：/save 你要存的内容")
+            return
+        try:
+            from content_ingest import _url_doc_id, _store
+            import hashlib, time as _time
+            doc_id = hashlib.md5(f"manual:{content[:100]}".encode()).hexdigest()
+            _store(doc_id, content, content[:30], "", "manual_save")
+            _send_text(chat_id, f"✅ 已存入素材库（{len(content)} 字）")
+        except Exception as e:
+            _send_text(chat_id, f"❌ 存入失败：{e}")
+        return
+
     # 选题回复分支：检测是否为"数字"或"数字，方向"格式
     topic_match = re.match(r'^\s*(\d+)\s*(?:[，,]\s*(.+))?\s*$', text)
     if topic_match and _has_valid_pending_topics():
@@ -404,22 +441,20 @@ def on_message(data: P2ImMessageReceiveV1):
         _send_text(chat_id, f"当前 chat_id: {chat_id}")
         return
 
-    # URL 入库分支
-    if text.startswith("http://") or text.startswith("https://"):
-        if detect_url_type(text) is not None:
-            _send_text(chat_id, "正在抓取入库...")
-            try:
-                ok, title = ingest_url(text)
-                if ok:
-                    _send_text(chat_id, f"✅ 已入库：{title}")
-                else:
-                    _send_text(chat_id, f"❌ 入库失败：{title}")
-            except Exception as e:
-                _send_text(chat_id, f"❌ 出错了：{type(e).__name__}: {str(e)[:200]}")
-            return
-        else:
-            _send_text(chat_id, "暂不支持该链接类型（目前支持微信公众号和 X 推文）")
-            return
+    # URL 入库分支：消息主体就是一个 URL（不超过 300 字符，不含换行）
+    _url_only = text.strip()
+    if (_url_only.startswith("http://") or _url_only.startswith("https://")) \
+            and len(_url_only) < 300 and "\n" not in _url_only:
+        _send_text(chat_id, "正在抓取入库...")
+        try:
+            ok, title = ingest_url(text)
+            if ok:
+                _send_text(chat_id, f"✅ 已入库：{title}")
+            else:
+                _send_text(chat_id, f"❌ 入库失败：{title}")
+        except Exception as e:
+            _send_text(chat_id, f"❌ 出错了：{type(e).__name__}: {str(e)[:200]}")
+        return
 
     try:
         ask_self(chat_id, user_id, text)
