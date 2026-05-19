@@ -51,8 +51,9 @@
 
 | 文件 | 职责 |
 |------|------|
+| `persona.py` | 人格模块：`build_system(mode)`、`load_context()`、`append_memory()`、`reload()`，统一管理四文件 |
 | `rag.py` | 向量检索：`retrieve(query)` 返回 Top-N 相似文本 |
-| `extract_memories.py` | 从 ChromaDB 随机抽样 → LLM 提取关键事实（定期运行，更新 memories.json）|
+| `extract_memories.py` | 从 ChromaDB 随机抽样 → LLM 提取关键事实（定期运行，已归档，不再使用）|
 
 ---
 
@@ -62,7 +63,8 @@
 |------|------|------|
 | ChromaDB | `CHROMA_PATH` | 所有个人记忆向量，collection 名为 `memories`，当前约 1.4 万条 |
 | SQLite | `DATA_PATH/conversations.db` | 飞书 Bot 对话历史（近 20 条用于上下文）|
-| memories.json | `DATA_PATH/memories.json` | 人格文件：个人风格、判断、偏好（即将拆分为四文件系统）|
+| persona/ | `DATA_PATH/persona/` | 四文件人格系统：SOUL.md / USER.md / MEMORY.md / SKILLS.md（不纳入 git）|
+| memories_archive.json | `DATA_PATH/memories_archive.json` | 旧人格文件备份，已不再使用 |
 | pending_topics.json | `DATA_PATH/pending_topics.json` | 当日待确认选题缓存（24 小时有效）|
 | data/inbox/ | `DATA_PATH/inbox/` | 待入库的 .md 文件（入库后移入 done/）|
 
@@ -105,17 +107,22 @@ RAG 可按 source 过滤，例如查询提到"36氪"或"公众号"时自动加 `
 
 ---
 
-## 人格系统（待升级）
+## 人格系统（已上线）
 
-**当前状态**：所有人格信息混在 `memories.json` 一个文件里。
+**当前状态**：四文件系统已实现并部署（2026-05-19）。
 
-**计划升级为四文件系统**（P0 任务，尚未实现）：
-- `SOUL.md` — 核心人格：语气、风格、行为约束、三种子模式（推演/镜子/记忆）
-- `USER.md` — 当前状态：职业、正在做的事、短期目标（变化最频繁）
-- `MEMORY.md` — 跨 session 积累的关键事实：经历、观点、判断、偏好
-- `SKILLS.md` — Bot 当前能力说明：推演框架、RAG 逻辑、指令说明
+四个文件存放在服务器 `DATA_PATH/persona/`，不纳入 git：
+- `SOUL.md` — 核心人格：语气、风格、行为约束、三种子模式（推演/镜子/知识库）
+- `USER.md` — 当前状态：职业、正在做的事、短期目标（变化最频繁，定期手动更新）
+- `MEMORY.md` — 跨 session 积累的关键事实，`/remember` 指令自动追加写入
+- `SKILLS.md` — Bot 当前能力说明：RAG 逻辑、指令列表、内容生成规格
 
-**负责模块**：需提取 `persona.py`，统一管理四文件，`self_feishu.py` 通过 `persona.py` 访问。
+**接口**（`persona.py`）：
+- `build_system("private")` — 完整 system prompt，飞书端使用
+- `build_system("public")` — 仅 SOUL + 公开约束，网页端使用
+- `load_context()` — 返回 USER.md + MEMORY.md 纯文本，供草稿/选题生成使用
+- `append_memory(content)` — 追加写入 MEMORY.md
+- `reload()` — 强制重读文件，返回新 system prompt
 
 ---
 
@@ -157,11 +164,18 @@ Cron 任务（服务器本地时间 UTC+8）：
 
 ---
 
-## 当前最高优先级（P0）
+## 当前最高优先级
 
-1. **人格四文件系统** — 拆分 memories.json，提取 persona.py，这是内容草稿质量的直接前提
-2. **RAG 触发改为语义判断** — 当前 9 个关键词覆盖不足
-3. **内容草稿质量验证** — 生成 10 篇草稿，统计实际发布率，目标 ≥50%（核心假设验证）
+**P0（已完成）**：
+- ✅ 人格四文件系统 — persona.py 已上线，四文件已部署至服务器
+
+**P0（进行中）**：
+1. **内容草稿质量验证** — 生成 10 篇草稿，统计实际发布率，目标 ≥50%（核心假设验证）
+2. **在即刻发一条** — 测试「野生西兰花」定位共鸣度，目标 10+ 真实互动
+
+**P1**：
+3. **RAG 触发改为语义判断** — 当前关键词覆盖不足，改为每次都检索由调用方决定是否注入
+4. **L1 Wiki 层** — Karpathy 模式，LLM 入库时自动更新 Markdown 知识页面
 
 ## 代码架构待改进（P1）
 
@@ -192,6 +206,54 @@ Cron 任务（服务器本地时间 UTC+8）：
 - `docs/plans/` — 实现计划
 - `docs/specs/` — 技术设计文档
 - `docs/superpowers/` — Claude Code session 生成的计划和设计文档
+
+---
+
+## 产品定位（2026-05-19 澄清）
+
+**OpenMe 的核心不是内容生成工具，而是认知积累基础设施。**
+
+> 把每天的碎片认知，变成未来可用的资产。
+
+内容草稿（公众号）只是一个输出口，不是核心价值。真正的差异化：
+- 输入零摩擦（飞书 bot，随手发）
+- 向量检索解决"找不到"问题
+- 把"积累"和"输出"连起来
+
+竞争对手不是 AI 写作工具，而是 Notion（太重）、Flomo（只存不用）、Mem.ai（英文，无中文生态）。
+
+**开源方向**：中文个人认知积累系统 + 飞书入口，目前没有人做好这个组合。
+
+---
+
+## 记忆架构：三层模型最终确认（2026-05-19）
+
+Andrej Karpathy 在 2026-04-xx 发布的 [Wiki 模式 gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 与已研究的 L1 摘要层 + Ars Contexta 方案本质相同，验证了方向正确。
+
+**三层架构：**
+
+```
+L0  原始存档（ChromaDB）
+    所有碎片原文，向量化，完整保留，RAG 检索
+        ↓ 入库时同步整理
+L1  Wiki 知识页面（待实现）
+    LLM 在每次入库时自动更新对应 Markdown 页面
+    例：MiroFish.md、职场判断.md、创业思考.md
+    查询时优先走 Wiki，找不到再走 L0 RAG
+        ↓ 长期提炼
+L2  人格四文件（待实现）
+    SOUL / USER / MEMORY / SKILLS
+    常驻 system prompt，几乎不变
+```
+
+**RAG 不会被替代**：Wiki 和 RAG 是分工关系。
+- Wiki = 百科全书，结构化结论，直接翻页
+- RAG = 原始书库，找具体出处和细节
+
+**实现顺序**：
+1. ✅ 四文件人格系统（已完成 2026-05-19）
+2. 🟡 L1 Wiki 层（Karpathy 模式，中等成本，价值最高）
+3. 🟡 Zep 替代 SQLite
 
 ---
 
