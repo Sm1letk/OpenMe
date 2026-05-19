@@ -162,6 +162,7 @@ def _fetch_wechat(url: str) -> tuple[str, str]:
 def _fetch_tweet(url: str) -> tuple[str, str]:
     """
     通过 fxtwitter API 抓取推文，返回 (title, body_text)。
+    若推文正文为空（纯链接转发），自动跟进链接用 jina 抓目标页内容。
     """
     username, tweet_id = extract_tweet_info(url)
     api_url = f"https://api.fxtwitter.com/{username}/status/{tweet_id}"
@@ -170,14 +171,74 @@ def _fetch_tweet(url: str) -> tuple[str, str]:
     data = resp.json()
 
     tweet = data.get("tweet") or {}
-    text = tweet.get("text", "")
-    if not text:
-        return None
+    text = tweet.get("text", "").strip()
     author = tweet.get("author", {}).get("name") or username
-    title = f"@{username}: {text[:60]}{'…' if len(text) > 60 else ''}"
-    body = f"@{author}\n{text}"
 
-    return title, body
+    if text:
+        title = f"@{username}: {text[:60]}{'…' if len(text) > 60 else ''}"
+        body = f"@{author}\n{text}"
+        return title, body
+
+    # 推文正文为空（X Article 或纯链接转发），直接用 jina 抓原始推文 URL
+    try:
+        title, body = _fetch_general(url)
+        return f"@{username} 分享：{title}", body
+    except Exception:
+        pass
+
+    raise ValueError("推文正文为空（纯图片/视频/已删除），请用 /save 手动存入文字内容")
+
+
+# ── 通用抓取（r.jina.ai 兜底） ────────────────────────────────────────────
+
+_LOGIN_WALL_SIGNALS = [
+    "Don't miss what's happening",
+    "Sign in to",
+    "Access Denied",
+    "404 Not Found",
+    "请登录",
+    "登录后查看",
+]
+
+
+def _is_login_wall(text: str) -> bool:
+    first_500 = text[:500]
+    return any(s in first_500 for s in _LOGIN_WALL_SIGNALS) or len(text.splitlines()) < 5
+
+
+def _fetch_general(url: str) -> tuple[str, str]:
+    """
+    级联抓取：jina → defuddle.md，返回 (title, body_text)。
+    支持小红书、知乎、Medium 等需要 JS 渲染的页面。
+    """
+    for proxy_url in [f"https://r.jina.ai/{url}", f"https://defuddle.md/{url}"]:
+        try:
+            resp = requests.get(
+                proxy_url,
+                headers={"Accept": "text/markdown"},
+                timeout=30,
+            )
+            if resp.status_code != 200:
+                continue
+            text = resp.text.strip()
+            if _is_login_wall(text):
+                continue
+
+            # 提取标题（第一个 # 行，或前 60 字）
+            title = ""
+            for line in text.splitlines():
+                line = line.strip()
+                if line.startswith("#"):
+                    title = line.lstrip("#").strip()
+                    break
+            if not title:
+                title = text[:60].replace("\n", " ")
+
+            return title, text
+        except Exception:
+            continue
+
+    raise ValueError("两个代理均无法抓取（可能是登录墙），请复制内容后用 /save 存入")
 
 
 # ── 主入口 ────────────────────────────────────────────────────────────────
@@ -189,8 +250,6 @@ def ingest_url(url: str) -> tuple[bool, str]:
     已入库则跳过并返回 (True, "标题（已入库）")。
     """
     url_type = detect_url_type(url)
-    if url_type is None:
-        return False, f"不支持的 URL 类型: {url}"
 
     doc_id = _url_doc_id(url)
 
@@ -209,12 +268,13 @@ def ingest_url(url: str) -> tuple[bool, str]:
         if url_type == "wechat":
             title, body = _fetch_wechat(url)
             source = "wechat_manual"
-        else:  # "x"
-            result = _fetch_tweet(url)
-            if result is None:
-                return False, "推文内容为空（已删除或 API 异常）"
-            title, body = result
+        elif url_type == "x":
+            title, body = _fetch_tweet(url)
             source = "x_manual"
+        else:
+            # 兜底：r.jina.ai 通用抓取（小红书、知乎、Medium 等）
+            title, body = _fetch_general(url)
+            source = "general_manual"
     except Exception as e:
         return False, f"抓取失败: {e}"
 

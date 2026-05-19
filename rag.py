@@ -35,12 +35,14 @@ def _embed(text: str) -> list[float]:
             time.sleep(2)
 
 
-def retrieve(query: str, n: int = 5) -> list[str]:
-    """检索与 query 最相关的历史片段，返回文本列表。仅私人 bot 调用。"""
+def retrieve(query: str, n: int = 5, where: dict | None = None) -> list[str]:
+    """检索与 query 最相关的历史片段，返回文本列表。
+    where: ChromaDB 元数据过滤条件，如 {"source": "wechat_article"}
+    """
     vec = _embed(query)
-    results = _col.query(
-        query_embeddings=[vec],
-        n_results=n,
-    )
+    kwargs = {"query_embeddings": [vec], "n_results": n}
+    if where:
+        kwargs["where"] = where
+    results = _col.query(**kwargs)
     docs = results["documents"][0] if results["documents"] else []
     return docs
