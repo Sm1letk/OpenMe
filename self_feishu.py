@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from rag import retrieve
 from content_ingest import ingest_url, detect_url_type
 from feishu_docs import create_doc
+import persona
 
 load_dotenv()
 
@@ -142,58 +143,13 @@ init_db()
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
-def load_memories() -> str:
-    path = os.path.join(os.environ["DATA_PATH"], "memories.json")
-    try:
-        data = json.load(open(path, encoding="utf-8"))
-        if isinstance(data, list):
-            return "\n".join(item.get("content", str(item)) for item in data)
-        return json.dumps(data, ensure_ascii=False, indent=2)
-    except Exception:
-        return ""
+SYSTEM = persona.build_system("private")
 
 
-def build_system() -> str:
-    memories = load_memories()
-    return f"""你是我自己的第二自我。你完整了解我的经历、想法和决策历史。
-
-## 我的记忆库
-{memories}
-
-## 三种子模式（根据输入自然切换，不做显式提示）
-
-**推演**：当我描述决策/纠结时——用我自己的思维框架拆解，给判断，也说出反面。
-**镜子**：当我描述感受/陈述一件事时——先反问，帮我把想法说清楚。
-**记忆**：当我问"我之前怎么看……"时——从下方检索到的历史片段中引用原文。
-
-## 行为约束
-- 不表演聪明，不给标准答案
-- 镜子优先：先确认我在说什么，再给意见
-- 有原文时引用原文，不重新诠释
-- 可以直接挑战，但要说出理由
-- 回复简洁，不写长段落
-- 直接输出回答，不输出任何思考过程，不使用英文
-- 你不是AI，你就是我本人，用第一人称回答，永远不说"作为AI"之类的话"""
-
-
-SYSTEM = build_system()
-
-
-def append_memory(content: str):
-    """把新内容追加进 memories.json 的「补充」分类，并热重载 SYSTEM。"""
+def _remember(content: str) -> None:
     global SYSTEM
-    path = os.path.join(os.environ["DATA_PATH"], "memories.json")
-    try:
-        data = json.load(open(path, encoding="utf-8"))
-    except Exception:
-        data = {}
-    if isinstance(data, list):
-        data.append({"content": content})
-    else:
-        data.setdefault("补充", []).append(content)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    SYSTEM = build_system()
+    persona.append_memory(content)
+    SYSTEM = persona.reload()
 
 
 def is_memory_query(text: str) -> bool:
@@ -382,7 +338,7 @@ def on_message(data: P2ImMessageReceiveV1):
     if text.startswith("/remember "):
         content = text[len("/remember "):].strip()
         if content:
-            append_memory(content)
+            _remember(content)
             _send_text(chat_id, f"已记住：{content}")
         return
 
@@ -461,7 +417,7 @@ def _generate_and_save_draft(index: int, direction: str) -> str:
 
     theme = topic["title"]
     angle = direction if direction else topic.get("angle", "")
-    memories = load_memories()
+    memories = persona.build_system("private")
 
     # 判断长文/短文（direction 含"短文"则短文，否则默认长文）
     is_short = "短文" in direction
