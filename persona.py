@@ -52,6 +52,16 @@ def build_system(mode: str = "private") -> str:
     return prefix + "\n\n" + "\n\n".join(sections)
 
 
+def load_context() -> str:
+    """返回 USER.md + MEMORY.md 的纯文本内容，供草稿/选题生成使用。不含角色前言。"""
+    parts = []
+    for filename in ("USER.md", "MEMORY.md"):
+        content = _read_file(filename)
+        if content:
+            parts.append(content)
+    return "\n\n".join(parts)
+
+
 def append_memory(content: str) -> None:
     """把新内容追加写入 MEMORY.md 末尾（一行一条）。"""
     path = _persona_dir() / "MEMORY.md"

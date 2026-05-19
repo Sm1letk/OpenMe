@@ -158,7 +158,7 @@ def main():
         return
 
     print(f"找到近3天内容：{len(docs)} 条")
-    memories = persona.build_system("private")
+    memories = persona.load_context()
     topics = _generate_topics(docs, memories)
     print(f"生成选题：{len(topics)} 条")
 

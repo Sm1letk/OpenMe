@@ -417,7 +417,7 @@ def _generate_and_save_draft(index: int, direction: str) -> str:
 
     theme = topic["title"]
     angle = direction if direction else topic.get("angle", "")
-    memories = persona.build_system("private")
+    memories = persona.load_context()
 
     # 判断长文/短文（direction 含"短文"则短文，否则默认长文）
     is_short = "短文" in direction
