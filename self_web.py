@@ -2,6 +2,7 @@ import os, re, json
 from flask import Flask, request, Response, stream_with_context
 from openai import OpenAI
 from dotenv import load_dotenv
+import persona
 
 load_dotenv()
 
@@ -16,27 +17,7 @@ sessions: dict[str, list] = {}
 MAX_SESSIONS = 500
 
 
-def load_public_bio() -> str:
-    path = os.path.join(os.environ["DATA_PATH"], "public_bio.md")
-    try:
-        return open(path, encoding="utf-8").read()
-    except FileNotFoundError:
-        return "（暂无公开简介）"
-
-
-PUBLIC_BIO = load_public_bio()
-
-SYSTEM = f"""你代表我（网站主人）和访问我个人主页的访客交流。
-
-## 关于我
-{PUBLIC_BIO}
-
-## 行为规则
-- 第一层：介绍我的经历、项目、核心观点
-- 第二层：聊深了，用我自己的思维框架回应访客问题
-- 只分享公开信息，不透露私人日记、私下想法、未发布内容
-- 如果被问到私人信息，礼貌说"这部分我没有公开"
-- 语气自然，像本人在聊天，不是客服"""
+SYSTEM = persona.build_system("public")
 
 
 @app.route("/api/chat", methods=["POST"])

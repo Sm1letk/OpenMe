@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from rag import retrieve
 from content_ingest import ingest_url, detect_url_type
 from feishu_docs import create_doc
+import persona
 
 load_dotenv()
 
@@ -142,17 +143,10 @@ init_db()
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
-def load_memories() -> str:
-    path = os.path.join(os.environ["DATA_PATH"], "memories.json")
-    try:
-        data = json.load(open(path, encoding="utf-8"))
-        if isinstance(data, list):
-            return "\n".join(item.get("content", str(item)) for item in data)
-        return json.dumps(data, ensure_ascii=False, indent=2)
-    except Exception:
-        return ""
+SYSTEM = persona.build_system("private")
 
 
+<<<<<<< HEAD
 def build_system() -> str:
     memories = load_memories()
     return f"""你是我自己的第二自我。你完整了解我的经历、想法和决策历史。
@@ -189,19 +183,12 @@ SYSTEM = build_system()
 
 def append_memory(content: str):
     """把新内容追加进 memories.json 的「补充」分类，并热重载 SYSTEM。"""
+=======
+def _remember(content: str) -> None:
+>>>>>>> claude/dreamy-hellman-7fe807
     global SYSTEM
-    path = os.path.join(os.environ["DATA_PATH"], "memories.json")
-    try:
-        data = json.load(open(path, encoding="utf-8"))
-    except Exception:
-        data = {}
-    if isinstance(data, list):
-        data.append({"content": content})
-    else:
-        data.setdefault("补充", []).append(content)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    SYSTEM = build_system()
+    persona.append_memory(content)
+    SYSTEM = persona.reload()
 
 
 def is_memory_query(text: str) -> bool:
@@ -404,7 +391,7 @@ def on_message(data: P2ImMessageReceiveV1):
     if text.startswith("/remember "):
         content = text[len("/remember "):].strip()
         if content:
-            append_memory(content)
+            _remember(content)
             _send_text(chat_id, f"已记住：{content}")
         return
 
@@ -496,7 +483,7 @@ def _generate_and_save_draft(index: int, direction: str) -> str:
 
     theme = topic["title"]
     angle = direction if direction else topic.get("angle", "")
-    memories = load_memories()
+    memories = persona.load_context()
 
     # 判断长文/短文（direction 含"短文"则短文，否则默认长文）
     is_short = "短文" in direction

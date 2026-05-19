@@ -11,6 +11,7 @@ import requests
 import chromadb
 from openai import OpenAI
 from dotenv import load_dotenv
+import persona
 
 load_dotenv()
 
@@ -60,18 +61,6 @@ def _send_text(text: str):
         },
         timeout=10,
     )
-
-
-def _load_memories() -> str:
-    path = os.path.join(DATA_PATH, "memories.json")
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return "\n".join(item.get("content", str(item)) for item in data)
-        return json.dumps(data, ensure_ascii=False, indent=2)
-    except Exception:
-        return ""
 
 
 def _get_recent_docs(days: int = 3) -> list[dict]:
@@ -169,7 +158,7 @@ def main():
         return
 
     print(f"找到近3天内容：{len(docs)} 条")
-    memories = _load_memories()
+    memories = persona.load_context()
     topics = _generate_topics(docs, memories)
     print(f"生成选题：{len(topics)} 条")
 
