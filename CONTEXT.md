@@ -193,22 +193,55 @@ Cron 任务（服务器本地时间 UTC+8）：
 - ✅ `who_am_i.py` — 认知指纹分析，已部署并跑通（2026-05-20）
 - ✅ `suggest_topics.py` bug fix — JSON 解析失败、KeyError 问题（2026-05-20）
 - ✅ 代码架构清理 — `embedding.py` / `feishu_client.py` / `stream.py`，消除重复逻辑，修复 think 过滤 bug（2026-05-20，已部署）
+- ✅ RAG 语义触发 — 删掉 `is_memory_query()` 关键词门控，每次对话都检索，n=5→10（2026-05-20，待 scp 部署）
 
-### P0 进行中（技术）
+### 下一步（明天开始）
 
-1. **RAG 语义触发**（小改动，立竿见影）
-   - 删掉 `is_memory_query()` 关键词门控
-   - 每次对话都调 `retrieve()`，由上层决定是否注入上下文
+**L1 Wiki — 分两阶段实现**（详细计划见 `docs/superpowers/plans/2026-05-20-wiki-l1.md`）
 
-2. **L1 Wiki 层**（核心，共生基础）
-   - Wiki 存于 `DATA_PATH/wiki/`，Markdown 文件，不纳入 git
-   - `index.md` 作为主题目录，LLM 读 index 找相关页面
-   - 入库钩子：每次 `ingest_*` 后触发 Wiki 更新
-   - 对话钩子：有价值的讨论自动判断是否更新 Wiki
-   - Agent 1 查询时：优先读 Wiki → 找不到再走 RAG
-   - Agent 2 生成时：Wiki 作为主素材来源
+**阶段一：只读**（先做）
+- 实现 `wiki.py` 的 `query_wiki()` + `init_wiki()`
+- `self_feishu.py` 集成 Wiki 查询，回复时优先读 Wiki
+- 手动写好各页面种子内容（以内容城池为基础）
+- 暂不实现自动更新
 
-3. **对话自动入库**（配套 Wiki）
+**阶段二：有门控的写**（阶段一稳定后）
+- 实现 `update_wiki()`，加核心概念关键词门控
+- 后台线程执行，不阻塞主流程
+- 追加型字段（如押注记录）用 append 模式，不全量重写
+
+**已识别的坑（实现时注意）**：
+- 触发门控太宽会污染页面 → 只在涉及核心概念关键词时触发
+- `update_wiki()` 同步调用会阻塞 6-10 秒 → 必须后台线程
+- 空页面冷启动质量差 → 先手动写种子再开自动更新
+- 全量重写会覆盖积累 → 押注记录等用 append 模式
+
+**Wiki 主题结构（已确认）**：
+```
+DATA_PATH/wiki/
+├── index.md          ← 主目录
+├── 双轨定价.md       ← 核心概念层
+├── 代际缝.md
+├── 提前押.md
+├── 老登局解析.md
+├── AI与就业结构.md   ← 素材层
+├── 注意力经济.md
+├── 平台机制.md
+├── 个体创业路径.md
+└── 现实样本/index.md ← 案例层
+```
+
+### 待 scp 部署到服务器
+
+- `self_feishu.py`（RAG 语义触发改动）
+
+### P1（Wiki 稳定后）
+
+5. **两个 agent 显式化** — Wiki 建好后 self_feishu.py 的拆分边界会自然清晰
+6. **对话后自动反思写入 MEMORY.md** — LLM 提议 → 用户确认，替代纯手动 `/remember`
+7. **入库质量过滤** — chunk 打分 0-10，低于阈值不入库，减少 RAG 噪声
+
+3. **对话自动入库**（配套 Wiki 阶段二）
    - 有价值的讨论不再需要手动 `/save`
    - LLM 判断对话是否值得入库（参考 chunk 质量打分）
 
