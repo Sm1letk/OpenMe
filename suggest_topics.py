@@ -120,11 +120,13 @@ def _generate_topics(docs: list[dict], memories: str) -> list[dict]:
     resp = _minimax.chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=2000,
+        max_tokens=3000,
         temperature=0.8,
     )
     raw = resp.choices[0].message.content
     raw = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
+    # 去掉 markdown 代码块包裹
+    raw = re.sub(r'^```[a-z]*\n?', '', raw).rstrip('`').strip()
 
     # 提取 JSON 数组
     m = re.search(r'\[.*\]', raw, re.DOTALL)
@@ -134,6 +136,8 @@ def _generate_topics(docs: list[dict], memories: str) -> list[dict]:
         topics = json.loads(m.group(0))
     except json.JSONDecodeError as e:
         raise ValueError(f"JSON 解析失败: {e} | 原文: {raw[:200]}")
+    if topics:
+        print(f"[DEBUG] 首条选题字段: {list(topics[0].keys())}")
     return topics
 
 
@@ -141,11 +145,13 @@ def _format_push_message(topics: list[dict]) -> str:
     """格式化推送消息"""
     lines = ["📋 今日选题建议（回复序号选择，如「3」或「3，聚焦在XX角度」）\n"]
     for t in topics:
+        url = t.get('source_url') or t.get('url') or ''
+        summary = t.get('source_summary') or t.get('summary') or t.get('source') or ''
         lines.append(
-            f"{t['index']}. {t['title']}\n"
-            f"   角度：{t['angle']}\n"
-            f"   来源：{t['source_summary']}"
-            + (f"（{t['source_url']}）" if t['source_url'] else "")
+            f"{t.get('index', '')}. {t.get('title', '')}\n"
+            f"   角度：{t.get('angle', '')}\n"
+            f"   来源：{summary}"
+            + (f"（{url}）" if url else "")
         )
     return "\n\n".join(lines)
 
