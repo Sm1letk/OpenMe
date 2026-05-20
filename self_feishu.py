@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 from rag import retrieve
 from content_ingest import ingest_url, detect_url_type
 from feishu_docs import create_doc
+from feishu_client import get_token
+from stream import filter_think_stream
 import persona
 
 load_dotenv()
@@ -79,22 +81,6 @@ ai = OpenAI(
 feishu = lark.Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
 
 processed: set[str] = set()
-_token_cache = {"token": "", "expires_at": 0}
-
-
-# ── 飞书 Token ────────────────────────────────────────────────────────────────
-
-def get_token() -> str:
-    if time.time() < _token_cache["expires_at"] - 60:
-        return _token_cache["token"]
-    resp = requests.post(
-        f"{FEISHU_API}/auth/v3/tenant_access_token/internal",
-        json={"app_id": APP_ID, "app_secret": APP_SECRET},
-        timeout=10,
-    ).json()
-    _token_cache["token"] = resp["tenant_access_token"]
-    _token_cache["expires_at"] = time.time() + resp.get("expire", 7200)
-    return _token_cache["token"]
 
 
 def _headers() -> dict:
@@ -264,26 +250,11 @@ def ask_self(chat_id: str, user_id: str, text: str):
     )
 
     full_text = ""
-    in_think = False
     seq = 1
     last_update = time.time()
 
-    for chunk in stream:
-        delta = chunk.choices[0].delta.content or ""
-        if not delta:
-            continue
-
-        # 过滤 <think>...</think>
-        if "<think>" in delta:
-            in_think = True
-        if in_think:
-            if "</think>" in delta:
-                in_think = False
-                delta = delta[delta.index("</think>") + 8:]
-            else:
-                continue
-
-        full_text += delta
+    for text_chunk in filter_think_stream(stream):
+        full_text += text_chunk
 
         # 每 0.3 秒推送一次更新
         if time.time() - last_update >= 0.3:

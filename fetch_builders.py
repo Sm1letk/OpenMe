@@ -13,32 +13,16 @@ except ModuleNotFoundError:
 import os, time, hashlib
 import requests
 import chromadb
-from openai import OpenAI
 from dotenv import load_dotenv
+from embedding import embed
 
 load_dotenv()
 
 FEED_URL    = "https://raw.githubusercontent.com/zarazhangrui/follow-builders/main/feed-x.json"
 CHROMA_PATH = os.environ["CHROMA_PATH"]
 
-_qw = OpenAI(
-    api_key=os.environ["QIANWEN_API_KEY"],
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-)
 _chroma = chromadb.PersistentClient(path=CHROMA_PATH)
 _col = _chroma.get_or_create_collection("memories", metadata={"hnsw:space": "cosine"})
-
-
-def _embed(text: str) -> list[float]:
-    for attempt in range(3):
-        try:
-            resp = _qw.embeddings.create(model="text-embedding-v3", input=text[:2000])
-            return resp.data[0].embedding
-        except Exception as e:
-            if attempt == 2:
-                raise
-            print(f"[WARN] embed failed (attempt {attempt+1}): {e}")
-            time.sleep(2)
 
 
 def _store_tweet(tweet: dict, author_name: str, author_handle: str) -> bool:
@@ -55,7 +39,7 @@ def _store_tweet(tweet: dict, author_name: str, author_handle: str) -> bool:
     tweet_url = tweet.get("url", f"https://x.com/{author_handle}/status/{tweet_id}")
     full_text = f"[{author_name}] {text}"
 
-    vec = _embed(full_text)
+    vec = embed(full_text)
     _col.add(
         ids=[doc_id],
         embeddings=[vec],

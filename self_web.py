@@ -2,6 +2,7 @@ import os, re, json
 from flask import Flask, request, Response, stream_with_context
 from openai import OpenAI
 from dotenv import load_dotenv
+from stream import filter_think_stream
 import persona
 
 load_dotenv()
@@ -38,7 +39,6 @@ def chat():
         hist[:] = hist[-20:]
 
     def generate():
-        buffer = ""
         full_text = []
         try:
             stream = ai.chat.completions.create(
@@ -47,36 +47,9 @@ def chat():
                 stream=True,
                 messages=[{"role": "system", "content": SYSTEM}] + hist,
             )
-            in_think = False
-            for chunk in stream:
-                delta = chunk.choices[0].delta.content or ""
-                buffer += delta
-
-                # 过滤 <think>...</think>
-                while True:
-                    if in_think:
-                        end = buffer.find("</think>")
-                        if end == -1:
-                            buffer = ""
-                            break
-                        buffer = buffer[end + 8:]
-                        in_think = False
-                    else:
-                        start = buffer.find("<think>")
-                        if start == -1:
-                            full_text.append(buffer)
-                            yield f"data: {json.dumps({'text': buffer})}\n\n"
-                            buffer = ""
-                            break
-                        if start > 0:
-                            full_text.append(buffer[:start])
-                            yield f"data: {json.dumps({'text': buffer[:start]})}\n\n"
-                        buffer = buffer[start + 7:]
-                        in_think = True
-
-            if buffer and not in_think:
-                full_text.append(buffer)
-                yield f"data: {json.dumps({'text': buffer})}\n\n"
+            for text_chunk in filter_think_stream(stream):
+                full_text.append(text_chunk)
+                yield f"data: {json.dumps({'text': text_chunk})}\n\n"
 
             # 保存完整回复到历史，支持正常多轮对话
             hist.append({"role": "assistant", "content": "".join(full_text)})

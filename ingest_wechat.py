@@ -2,11 +2,11 @@ __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
-import os, json, re, hashlib, time
+import os, json, re, hashlib
 from pathlib import Path
-from openai import OpenAI
 import chromadb
 from dotenv import load_dotenv
+from embedding import embed
 
 load_dotenv()
 
@@ -14,10 +14,6 @@ CHROMA_PATH = os.environ["CHROMA_PATH"]
 DATA_PATH   = os.environ["DATA_PATH"]
 TEXTS_DIR   = os.path.join(DATA_PATH, "texts")
 
-qw = OpenAI(
-    api_key=os.environ["QIANWEN_API_KEY"],
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-)
 chroma = chromadb.PersistentClient(path=CHROMA_PATH)
 col    = chroma.get_or_create_collection("memories", metadata={"hnsw:space": "cosine"})
 
@@ -45,18 +41,6 @@ SENSITIVE_PATTERNS = [
 WINDOW_SECONDS  = 30 * 60   # 30 分钟一个对话段
 MIN_USER_CHARS  = 50        # 用户发言总字数低于此阈值，丢弃该段
 MIN_USER_MSGS   = 2         # 用户发言条数低于此阈值，丢弃该段
-
-
-def embed(text: str) -> list[float]:
-    for attempt in range(3):
-        try:
-            resp = qw.embeddings.create(model="text-embedding-v3", input=text[:2000])
-            return resp.data[0].embedding
-        except Exception as e:
-            if attempt == 2:
-                raise
-            print(f"  [WARN] embed failed (attempt {attempt+1}): {e}, retrying...")
-            time.sleep(2)
 
 
 def chunk_id(source: str, idx: int) -> str:
