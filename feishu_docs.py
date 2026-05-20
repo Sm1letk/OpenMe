@@ -4,38 +4,20 @@
 调用 Feishu docx v1 API 在指定文件夹创建文档并写入内容。
 """
 
-import os, time
+import os
 import requests
 from dotenv import load_dotenv
+from feishu_client import get_token
 
 load_dotenv()
 
-APP_ID     = os.environ["SELF_FEISHU_APP_ID"]
-APP_SECRET = os.environ["SELF_FEISHU_APP_SECRET"]
 FEISHU_API = "https://open.feishu.cn/open-apis"
 FOLDER_TOKEN = "WFqPfQ3RElxZdEdj93lceJbknBd"
 FEISHU_DOMAIN = "acn0f8jrf3fc.feishu.cn"
 
-_token_cache = {"token": "", "expires_at": 0}
-
-
-def _get_token() -> str:
-    if time.time() < _token_cache["expires_at"] - 60:
-        return _token_cache["token"]
-    resp = requests.post(
-        f"{FEISHU_API}/auth/v3/tenant_access_token/internal",
-        json={"app_id": APP_ID, "app_secret": APP_SECRET},
-        timeout=10,
-    ).json()
-    if "tenant_access_token" not in resp:
-        raise RuntimeError(f"获取 token 失败: {resp}")
-    _token_cache["token"] = resp["tenant_access_token"]
-    _token_cache["expires_at"] = time.time() + resp.get("expire", 7200)
-    return _token_cache["token"]
-
 
 def _headers() -> dict:
-    return {"Authorization": f"Bearer {_get_token()}", "Content-Type": "application/json"}
+    return {"Authorization": f"Bearer {get_token()}", "Content-Type": "application/json"}
 
 
 def _create_document(title: str) -> str:

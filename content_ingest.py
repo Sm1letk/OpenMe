@@ -9,25 +9,14 @@ import os, re, hashlib, time
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from embedding import embed
 
 load_dotenv()
 
 # ── 懒加载客户端（测试时不会触发连接） ────────────────────────────────────
 
-_qw = None
 _chroma = None
 _col = None
-
-
-def _get_qw():
-    global _qw
-    if _qw is None:
-        from openai import OpenAI
-        _qw = OpenAI(
-            api_key=os.environ["QIANWEN_API_KEY"],
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        )
-    return _qw
 
 
 def _get_col():
@@ -69,24 +58,6 @@ def extract_tweet_info(url: str) -> tuple[str, str]:
     if not m:
         raise ValueError(f"无法从 URL 提取 tweet 信息: {url}")
     return m.group(1), m.group(2)
-
-
-# ── Embedding ─────────────────────────────────────────────────────────────
-
-def embed(text: str) -> list[float]:
-    qw = _get_qw()
-    for attempt in range(3):
-        try:
-            resp = qw.embeddings.create(
-                model="text-embedding-v3",
-                input=text[:2000],
-            )
-            return resp.data[0].embedding
-        except Exception as e:
-            if attempt == 2:
-                raise
-            print(f"  [WARN] embed failed (attempt {attempt+1}): {e}, retrying...")
-            time.sleep(2)
 
 
 # ── 去重 & 入库 ───────────────────────────────────────────────────────────

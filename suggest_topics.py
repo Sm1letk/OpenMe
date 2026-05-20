@@ -11,6 +11,7 @@ import requests
 import chromadb
 from openai import OpenAI
 from dotenv import load_dotenv
+from feishu_client import get_token
 import persona
 
 load_dotenv()
@@ -18,8 +19,6 @@ load_dotenv()
 CHROMA_PATH    = os.environ["CHROMA_PATH"]
 DATA_PATH      = os.environ["DATA_PATH"]
 TARGET_CHAT_ID = os.environ["TARGET_CHAT_ID"]
-APP_ID         = os.environ["SELF_FEISHU_APP_ID"]
-APP_SECRET     = os.environ["SELF_FEISHU_APP_SECRET"]
 FEISHU_API     = "https://open.feishu.cn/open-apis"
 PENDING_PATH   = os.path.join(DATA_PATH, "pending_topics.json")
 MODEL          = "MiniMax-M2.7"
@@ -31,29 +30,11 @@ _minimax = OpenAI(
 _chroma = chromadb.PersistentClient(path=CHROMA_PATH)
 _col = _chroma.get_or_create_collection("memories", metadata={"hnsw:space": "cosine"})
 
-_token_cache = {"token": "", "expires_at": 0}
-
-
-def _get_token() -> str:
-    if time.time() < _token_cache["expires_at"] - 60:
-        return _token_cache["token"]
-    resp = requests.post(
-        f"{FEISHU_API}/auth/v3/tenant_access_token/internal",
-        json={"app_id": APP_ID, "app_secret": APP_SECRET},
-        timeout=10,
-    ).json()
-    if "tenant_access_token" not in resp:
-        raise RuntimeError(f"获取 token 失败: {resp}")
-    _token_cache["token"] = resp["tenant_access_token"]
-    _token_cache["expires_at"] = time.time() + resp.get("expire", 7200)
-    return _token_cache["token"]
-
-
 def _send_text(text: str):
     """向 TARGET_CHAT_ID 发送文本消息"""
     requests.post(
         f"{FEISHU_API}/im/v1/messages?receive_id_type=chat_id",
-        headers={"Authorization": f"Bearer {_get_token()}", "Content-Type": "application/json"},
+        headers={"Authorization": f"Bearer {get_token()}", "Content-Type": "application/json"},
         json={
             "receive_id": TARGET_CHAT_ID,
             "msg_type": "text",
