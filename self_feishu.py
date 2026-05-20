@@ -138,15 +138,6 @@ def _remember(content: str) -> None:
     SYSTEM = persona.reload()
 
 
-def is_memory_query(text: str) -> bool:
-    keywords = [
-        "之前", "曾经", "以前", "当时", "历史", "记得", "怎么看", "说过", "想过",
-        "文章", "素材", "结合", "36氪", "公众号", "看过", "读过", "入库", "知识库",
-        "相关", "有没有", "有什么", "找一下", "搜一下",
-    ]
-    return any(k in text for k in keywords)
-
-
 # ── 流式卡片发送 ──────────────────────────────────────────────────────────────
 
 def create_streaming_card() -> str:
@@ -215,22 +206,21 @@ def ask_self(chat_id: str, user_id: str, text: str):
     hist = db_load_recent(user_id, n=20)
 
     rag_context = ""
-    if is_memory_query(text):
-        try:
-            # 如果用户明确问 36氪/公众号，按来源过滤，避免被其他内容淹没
-            source_keywords = {"36氪": "wechat_article", "公众号": "wechat_article"}
-            where_filter = None
-            for kw, src in source_keywords.items():
-                if kw in text:
-                    where_filter = {"source": src}
-                    break
+    try:
+        # 提到 36氪/公众号时按来源过滤，避免被其他内容淹没
+        source_keywords = {"36氪": "wechat_article", "公众号": "wechat_article"}
+        where_filter = None
+        for kw, src in source_keywords.items():
+            if kw in text:
+                where_filter = {"source": src}
+                break
 
-            hits = retrieve(text, n=5, where=where_filter)
-            if hits:
-                label = "36氪文章" if where_filter else "知识库"
-                rag_context = f"\n\n## 检索到的相关片段（来自{label}）\n" + "\n---\n".join(hits)
-        except Exception:
-            pass
+        hits = retrieve(text, n=10, where=where_filter)
+        if hits:
+            label = "36氪文章" if where_filter else "知识库"
+            rag_context = f"\n\n## 检索到的相关片段（来自{label}）\n" + "\n---\n".join(hits)
+    except Exception:
+        pass
 
     db_append(user_id, "user", text)
     hist.append({"role": "user", "content": text})
