@@ -171,6 +171,7 @@ Cron 任务（服务器本地时间 UTC+8）：
 - ✅ 人格四文件系统 — persona.py 已上线，四文件已部署至服务器
 - ✅ `who_am_i.py` — 认知指纹分析脚本，已部署并跑通（2026-05-20）
 - ✅ `suggest_topics.py` bug fix — 修复 LLM 返回 markdown 代码块导致 JSON 解析失败、KeyError 问题（2026-05-20）
+- ✅ 代码架构清理 — 提取 `embedding.py` / `feishu_client.py` / `stream.py` 三个共享模块，消除 11 处重复逻辑，修复 `self_feishu.py` 跨 chunk think 过滤 bug（2026-05-20，已部署）
 
 **P0（进行中）**：
 1. **野生西兰花第一条内容** — 用户已知自己的真实声音（把沉重说得轻巧）和惯用角度（成本视角、第一性原理），但还未迈出发布第一步。核心卡点：等待完全想清楚才发，而清晰只会在发布后产生。
@@ -182,10 +183,13 @@ Cron 任务（服务器本地时间 UTC+8）：
 
 ## 代码架构待改进（P1）
 
-- `embedding.py` — 合并 5 处重复的 embed() + 重试逻辑
-- `stream.py` — 统一飞书端和网页端的 `<think>` 过滤逻辑
-- `feishu_client.py` — 合并 3 处重复的 token 缓存逻辑
 - `config.py` — 集中管理全部环境变量（P2）
+
+### 已完成（2026-05-20）
+
+- ✅ `embedding.py` — 统一 5 处 embed() + 重试逻辑，所有入库脚本 `from embedding import embed`
+- ✅ `feishu_client.py` — 统一 3 处 token 缓存，进程内 token 共享，修复 self_feishu.py 缺失的错误检查
+- ✅ `stream.py` — 统一流式 `<think>` 过滤，`filter_think_stream(stream)` 生成器，修复 self_feishu.py 跨 chunk 边界 bug
 
 ---
 
