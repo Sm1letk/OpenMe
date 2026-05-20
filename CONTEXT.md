@@ -165,31 +165,79 @@ Cron 任务（服务器本地时间 UTC+8）：
 
 ---
 
-## 当前最高优先级
+## 产品架构方向（2026-05-20 确认）
 
-**P0（已完成）**：
+飞书 Bot 演进为**两个 agent 协作**的形态：
+
+- **Agent 1（自我认知）**：对话、RAG 检索、记忆写入，对应 `self_feishu.py` → `ask_self()`
+- **Agent 2（内容生产）**：选题、草稿生成、推送飞书文档，对应 `suggest_topics.py` + `_generate_and_save_draft()`
+- **L1 Wiki**：两个 agent 之间的结构化记忆层，是"共生"的核心基础
+
+**共生循环**：
+```
+用户讨论 / 外部内容入库
+    → ChromaDB（L0 原始）
+    → LLM 更新对应 Wiki 主题页（L1）
+    → Agent 1 回复时优先读 Wiki
+    → Agent 2 生成内容时读 Wiki 作为主素材
+    → 发布内容 → 新讨论 → 循环
+```
+
+---
+
+## 当前优先级路线图
+
+### P0 已完成
+
 - ✅ 人格四文件系统 — persona.py 已上线，四文件已部署至服务器
-- ✅ `who_am_i.py` — 认知指纹分析脚本，已部署并跑通（2026-05-20）
-- ✅ `suggest_topics.py` bug fix — 修复 LLM 返回 markdown 代码块导致 JSON 解析失败、KeyError 问题（2026-05-20）
-- ✅ 代码架构清理 — 提取 `embedding.py` / `feishu_client.py` / `stream.py` 三个共享模块，消除 11 处重复逻辑，修复 `self_feishu.py` 跨 chunk think 过滤 bug（2026-05-20，已部署）
+- ✅ `who_am_i.py` — 认知指纹分析，已部署并跑通（2026-05-20）
+- ✅ `suggest_topics.py` bug fix — JSON 解析失败、KeyError 问题（2026-05-20）
+- ✅ 代码架构清理 — `embedding.py` / `feishu_client.py` / `stream.py`，消除重复逻辑，修复 think 过滤 bug（2026-05-20，已部署）
 
-**P0（进行中）**：
-1. **野生西兰花第一条内容** — 用户已知自己的真实声音（把沉重说得轻巧）和惯用角度（成本视角、第一性原理），但还未迈出发布第一步。核心卡点：等待完全想清楚才发，而清晰只会在发布后产生。
-2. **who_am_i 结果的消化与应用** — 认知指纹已生成（保存在 `DATA_PATH/who_am_i.json`），下一步：用结果指导野生西兰花的内容角度选择
+### P0 进行中（技术）
 
-**P1**：
-3. **RAG 触发改为语义判断** — 当前关键词覆盖不足，改为每次都检索由调用方决定是否注入
-4. **L1 Wiki 层** — Karpathy 模式，LLM 入库时自动更新 Markdown 知识页面
+1. **RAG 语义触发**（小改动，立竿见影）
+   - 删掉 `is_memory_query()` 关键词门控
+   - 每次对话都调 `retrieve()`，由上层决定是否注入上下文
 
-## 代码架构待改进（P1）
+2. **L1 Wiki 层**（核心，共生基础）
+   - Wiki 存于 `DATA_PATH/wiki/`，Markdown 文件，不纳入 git
+   - `index.md` 作为主题目录，LLM 读 index 找相关页面
+   - 入库钩子：每次 `ingest_*` 后触发 Wiki 更新
+   - 对话钩子：有价值的讨论自动判断是否更新 Wiki
+   - Agent 1 查询时：优先读 Wiki → 找不到再走 RAG
+   - Agent 2 生成时：Wiki 作为主素材来源
 
-- `config.py` — 集中管理全部环境变量（P2）
+3. **对话自动入库**（配套 Wiki）
+   - 有价值的讨论不再需要手动 `/save`
+   - LLM 判断对话是否值得入库（参考 chunk 质量打分）
 
-### 已完成（2026-05-20）
+### P0 进行中（内容）
 
-- ✅ `embedding.py` — 统一 5 处 embed() + 重试逻辑，所有入库脚本 `from embedding import embed`
-- ✅ `feishu_client.py` — 统一 3 处 token 缓存，进程内 token 共享，修复 self_feishu.py 缺失的错误检查
-- ✅ `stream.py` — 统一流式 `<think>` 过滤，`filter_think_stream(stream)` 生成器，修复 self_feishu.py 跨 chunk 边界 bug
+4. **野生西兰花第一条内容** — 认知指纹已有（把沉重说得轻巧 / 成本视角 / 第一性原理），卡点是等想清楚才发。Wiki 建好后用认知指纹指导角度选择。
+
+### P1（Wiki 稳定后）
+
+5. **两个 agent 显式化** — Wiki 建好后 self_feishu.py 的拆分边界会自然清晰
+6. **对话后自动反思写入 MEMORY.md** — LLM 提议 → 用户确认，替代纯手动 `/remember`
+7. **入库质量过滤** — chunk 打分 0-10，低于阈值不入库，减少 RAG 噪声
+
+### P2（以后）
+
+8. **Zep 替代 SQLite** — 时序感知记忆，知道判断的新旧
+9. **主动触达后台进程** — Bot 主动推送洞察（OpenHanako Hub 模式）
+10. **渠道适配器重构** — 有第三个渠道时再做（PocketPaw 模式）
+11. **`config.py`** — 集中管理环境变量
+
+---
+
+## 代码架构说明
+
+### 共享模块（2026-05-20 提取）
+
+- `embedding.py` — `embed(text)` 统一 embedding + 重试，所有入库脚本导入此处
+- `feishu_client.py` — `get_token()` 统一 token 缓存，进程内共享
+- `stream.py` — `filter_think_stream(stream)` 流式 think 过滤生成器
 
 ---
 
